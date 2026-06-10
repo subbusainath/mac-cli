@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/spf13/cobra"
 	"github.com/subbusainath/mac-cli/internal/db"
@@ -68,14 +69,29 @@ func codeCmd() *cobra.Command {
 				return fmt.Errorf("no mac project in %s — run 'mac' first to initialise", cwd)
 			}
 
-			// Phase 2: hand off to LangGraph Python orchestrator.
-			fmt.Printf("Project: %s\nTask:    %s\n\nLangGraph orchestrator — Phase 2\n", project.Name, args[0])
+			// Hand off to the Python LangGraph orchestrator. It owns the
+			// session lifecycle, TDD loop, and HIL prompts on this terminal.
+			bin := os.Getenv("MAC_ORCHESTRATOR")
+			if bin == "" {
+				bin = "mac-orchestrator"
+			}
+			orch := exec.CommandContext(ctx, bin,
+				"--project", cwd,
+				"--task", args[0],
+				"--db", resolveDSN(cmd),
+			)
+			orch.Stdin = os.Stdin
+			orch.Stdout = os.Stdout
+			orch.Stderr = os.Stderr
+			if err := orch.Run(); err != nil {
+				return fmt.Errorf("orchestrator: %w\n\nInstall it with: uv tool install --from ./orchestrator mac-orchestrator", err)
+			}
 			return nil
 		},
 	}
 }
 
-func connectDB(ctx context.Context, cmd *cobra.Command) (*db.DB, error) {
+func resolveDSN(cmd *cobra.Command) string {
 	dsn, _ := cmd.Flags().GetString("db")
 	if dsn == "" {
 		dsn = os.Getenv("MAC_DB_URL")
@@ -83,7 +99,11 @@ func connectDB(ctx context.Context, cmd *cobra.Command) (*db.DB, error) {
 	if dsn == "" {
 		dsn = defaultDSN
 	}
-	database, err := db.Connect(ctx, dsn)
+	return dsn
+}
+
+func connectDB(ctx context.Context, cmd *cobra.Command) (*db.DB, error) {
+	database, err := db.Connect(ctx, resolveDSN(cmd))
 	if err != nil {
 		return nil, fmt.Errorf(
 			"cannot connect to PostgreSQL: %w\n\nSet MAC_DB_URL env var or pass --db flag", err)

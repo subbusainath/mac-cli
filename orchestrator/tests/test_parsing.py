@@ -28,6 +28,23 @@ def test_missing_json_block_raises():
         parse_coder_output("no block here")
 
 
+def test_nested_multikey_json_with_trailing_prose():
+    reply = (
+        "Explanation.\n```json\n"
+        '{"changes": [{"path": "a.py", "content": "x={1:2}"},'
+        ' {"path": "b/c.py", "content": "y"}], "test_command": "pytest -v"}'
+        "\n```\nMore prose after."
+    )
+    changes, cmd = parse_coder_output(reply)
+    assert [c["path"] for c in changes] == ["a.py", "b/c.py"]
+    assert cmd == "pytest -v"
+
+
+def test_invalid_json_in_block_raises_value_error():
+    with pytest.raises(ValueError, match="not valid JSON"):
+        parse_coder_output('```json\n{"changes": [,]}\n```')
+
+
 def test_missing_test_command_defaults_empty():
     reply = '```json\n{"changes": []}\n```'
     changes, cmd = parse_coder_output(reply)

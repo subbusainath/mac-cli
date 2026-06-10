@@ -87,7 +87,8 @@ class Database:
 
     def lookup_fixes(self, project_id: str, error_text: str | None = None,
                      target_folder: str | None = None, limit: int = 5) -> list[dict[str, str]]:
-        """Historical fixes: exact hash match first, then same-folder matches."""
+        """Historical fixes. Filters by exact error hash when error_text is
+        given (target_folder is then ignored), else by target_folder."""
         clauses, params = ["project_id = %s", "successful_fix <> ''"], [project_id]
         if error_text is not None:
             clauses.append("error_hash = %s")

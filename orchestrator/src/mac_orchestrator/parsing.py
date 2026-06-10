@@ -11,7 +11,10 @@ def parse_coder_output(text: str) -> tuple[list[FileChange], str]:
     match = _JSON_BLOCK.search(text)
     if match is None:
         raise ValueError("coder reply has no ```json block with changes")
-    data = json.loads(match.group(1))
+    try:
+        data = json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"coder reply ```json block is not valid JSON: {exc}") from exc
     changes: list[FileChange] = [
         {"path": c["path"], "content": c["content"]} for c in data.get("changes", [])
     ]

@@ -38,6 +38,7 @@ def evaluate(phase: TDDPhase, exit_code: int, output: str) -> tuple[TDDPhase, st
 
 
 def route_after_test(state: MacAgentState) -> str:
-    if state.get("iterations", 0) >= MAX_ITERATIONS and state["verdict"] != "done":
+    verdict = state.get("verdict", "halt")
+    if state.get("iterations", 0) >= MAX_ITERATIONS and verdict != "done":
         return "halt"
-    return state["verdict"]
+    return verdict

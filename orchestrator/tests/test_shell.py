@@ -12,6 +12,17 @@ def test_run_success(tmp_path):
     assert result.exit_code == 0
 
 
+def test_classify_assertion_quoting_dirty_string_is_clean():
+    out = ("FAILED tests/test_io.py::test_missing - AssertionError: "
+           "assert 'No such file or directory' in err.value.args")
+    assert classify_failure(out) == "clean"
+
+
+def test_classify_bare_missing_file_is_dirty():
+    out = "python: can't open file '/x/run.py': [Errno 2] No such file or directory"
+    assert classify_failure(out) == "dirty"
+
+
 def test_classify_clean_assertion_failure():
     out = "FAILED tests/test_x.py::test_x - AssertionError: assert 1 == 2"
     assert classify_failure(out) == "clean"

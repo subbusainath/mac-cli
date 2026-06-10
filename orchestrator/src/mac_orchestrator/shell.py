@@ -12,6 +12,13 @@ _DIRTY_MARKERS = (
     "error[E", "cannot find module", "compilation failed", "undefined:",
 )
 
+# Explicit test-failure markers. These take precedence over _DIRTY_MARKERS:
+# an assertion failure whose message merely quotes a dirty-looking string
+# (e.g. "No such file or directory") is still a clean failure.
+_CLEAN_MARKERS = (
+    "AssertionError", "assertion failed", "FAILED", "FAIL:", "assert_eq!",
+)
+
 
 @dataclass(frozen=True)
 class TestResult:
@@ -33,6 +40,8 @@ def run_test_command(command: str, cwd: str, timeout: int = 300) -> TestResult:
 
 def classify_failure(output: str) -> str:
     """'dirty' = infrastructure/syntax error; 'clean' = genuine test failure."""
+    if any(marker in output for marker in _CLEAN_MARKERS):
+        return "clean"
     if any(marker in output for marker in _DIRTY_MARKERS):
         return "dirty"
     return "clean"

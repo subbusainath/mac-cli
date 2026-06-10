@@ -32,7 +32,8 @@ def render_diff(project_root: str, changes: list[FileChange]) -> str:
 
 
 def apply_changes(project_root: str, changes: list[FileChange]) -> list[str]:
-    # Validate every path before writing anything — all-or-nothing.
+    # Validate every path before any write. Writes are not atomic: a failure
+    # mid-loop leaves earlier files written (reflected in the returned list).
     targets = [(_resolve(project_root, c["path"]), c) for c in changes]
     written: list[str] = []
     for target, change in targets:

@@ -1,0 +1,14 @@
+# Go
+/mac
+*.test
+
+# Python (orchestrator)
+__pycache__/
+*.pyc
+.venv/
+orchestrator/.venv/
+.pytest_cache/
+*.egg-info/
+
+# Local env
+.env

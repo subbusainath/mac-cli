@@ -1,6 +1,6 @@
 import pytest
 
-from mac_orchestrator.apply import apply_changes, render_diff
+from mac_orchestrator.apply import apply_changes, changes_with_old, render_diff
 
 
 def test_apply_writes_new_file(tmp_path):

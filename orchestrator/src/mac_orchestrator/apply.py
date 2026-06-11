@@ -31,6 +31,16 @@ def render_diff(project_root: str, changes: list[FileChange]) -> str:
     return "\n\n".join(blocks)
 
 
+def changes_with_old(project_root: str, changes: list[FileChange]) -> list[dict]:
+    """Pair each pending change with the file's current content for diff UIs."""
+    out = []
+    for change in changes:
+        target = _resolve(project_root, change["path"])
+        old = target.read_text() if target.exists() else ""
+        out.append({"path": change["path"], "old": old, "new": change["content"]})
+    return out
+
+
 def apply_changes(project_root: str, changes: list[FileChange]) -> list[str]:
     # Validate every path before any write. Writes are not atomic: a failure
     # mid-loop leaves earlier files written (reflected in the returned list).

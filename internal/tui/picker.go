@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,14 +11,8 @@ import (
 	"github.com/subbusainath/mac-cli/internal/db"
 )
 
-var (
-	pickerTitleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7C3AED")).MarginLeft(2)
-	pickerItemStyle     = lipgloss.NewStyle().PaddingLeft(4)
-	pickerSelectedStyle = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("#7C3AED")).Bold(true)
-)
+// ── Delegate ──────────────────────────────────────────────────────────────
 
-// projectItem wraps a db.Project for the list component.
-// A nil project means "New Project".
 type projectItem struct{ project *db.Project }
 
 func (i projectItem) FilterValue() string {
@@ -29,7 +24,7 @@ func (i projectItem) FilterValue() string {
 
 type projectDelegate struct{}
 
-func (d projectDelegate) Height() int                              { return 1 }
+func (d projectDelegate) Height() int                             { return 2 }
 func (d projectDelegate) Spacing() int                            { return 0 }
 func (d projectDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
@@ -39,42 +34,108 @@ func (d projectDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		return
 	}
 
-	var label string
+	selected := index == m.Index()
+
 	if pi.project == nil {
-		label = "✦  New Project"
-	} else {
-		dim := lipgloss.NewStyle().Faint(true).Render("  " + pi.project.Path)
-		label = pi.project.Name + dim
+		// "New Project" option with a sparkle icon
+		label := lipgloss.NewStyle().Bold(true).Render("✦  New Project")
+		hint := DimStyle("  create a new project from scratch")
+		if selected {
+			fmt.Fprint(w,
+				lipgloss.NewStyle().
+					BorderStyle(lipgloss.ThickBorder()).
+					BorderLeft(true).
+					BorderForeground(clrPurple).
+					PaddingLeft(1).
+					Render(
+						lipgloss.JoinHorizontal(lipgloss.Top,
+							AccentStyle("▶  "+label),
+							DimStyle("  create a new project"),
+						),
+					),
+			)
+		} else {
+			fmt.Fprint(w,
+				lipgloss.NewStyle().PaddingLeft(4).Render(label+hint),
+			)
+		}
+		return
 	}
 
-	if index == m.Index() {
-		fmt.Fprint(w, pickerSelectedStyle.Render("> "+label))
+	name := pi.project.Name
+
+	if selected {
+		rendered := lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().Bold(true).Foreground(clrPurple).Render("▶  "+name),
+			lipgloss.NewStyle().PaddingLeft(4).Foreground(clrMuted).Render(pi.project.Path),
+		)
+		fmt.Fprint(w,
+			lipgloss.NewStyle().
+				BorderStyle(lipgloss.ThickBorder()).
+				BorderLeft(true).
+				BorderForeground(clrPurple).
+				PaddingLeft(1).
+				Render(rendered),
+		)
 	} else {
-		fmt.Fprint(w, pickerItemStyle.Render(label))
+		rendered := lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().PaddingLeft(4).Render(name),
+			lipgloss.NewStyle().PaddingLeft(4).Foreground(clrMuted).Render(pi.project.Path),
+		)
+		fmt.Fprint(w, rendered)
 	}
 }
+
+// ── Model ─────────────────────────────────────────────────────────────────
 
 type pickerModel struct {
 	list     list.Model
-	choice   *db.Project // nil = new project selected
+	choice   *db.Project
 	quitting bool
+	width    int
+	height   int
 }
 
 func newPickerModel(projects []db.Project) pickerModel {
-	items := []list.Item{projectItem{nil}} // "New Project" always first
+	items := []list.Item{projectItem{nil}}
 	for i := range projects {
 		items = append(items, projectItem{&projects[i]})
 	}
 
-	l := list.New(items, projectDelegate{}, 70, 18)
-	l.Title = "mac  —  select a project"
+	// ── custom delegate ─────────────────────────────────────────────────
+	d := projectDelegate{}
+
+	l := list.New(items, d, 70, 18)
+	l.Title = "select a project"
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
-	l.Styles.Title = pickerTitleStyle
-	l.Styles.PaginationStyle = list.DefaultStyles().PaginationStyle.PaddingLeft(4)
-	l.Styles.HelpStyle = list.DefaultStyles().HelpStyle.PaddingLeft(4).PaddingBottom(1)
+	l.DisableQuitKeybindings()
 
-	return pickerModel{list: l}
+	// ── Style the list chrome ───────────────────────────────────────────
+	sty := list.DefaultStyles()
+	sty.Title = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(clrPurple).
+		PaddingLeft(2)
+	sty.FilterPrompt = lipgloss.NewStyle().
+		Foreground(clrCyan).
+		Bold(true).
+		PaddingLeft(2)
+	sty.FilterCursor = lipgloss.NewStyle().
+		Foreground(clrPurple)
+	sty.PaginationStyle = lipgloss.NewStyle().
+		Foreground(clrMuted).
+		PaddingLeft(2)
+	sty.HelpStyle = lipgloss.NewStyle().
+		Foreground(clrBorder).
+		PaddingLeft(2).
+		PaddingBottom(1)
+	sty.StatusBar = lipgloss.NewStyle().
+		Foreground(clrMuted).
+		PaddingLeft(2)
+	l.Styles = sty
+
+	return pickerModel{list: l, width: 70, height: 18}
 }
 
 func (m pickerModel) Init() tea.Cmd { return nil }
@@ -83,7 +144,7 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
 		case "enter":
@@ -94,8 +155,10 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	case tea.WindowSizeMsg:
-		m.list.SetWidth(msg.Width)
-		m.list.SetHeight(msg.Height - 2)
+		m.width = msg.Width
+		m.height = msg.Height
+		m.list.SetWidth(msg.Width - 4)
+		m.list.SetHeight(msg.Height - 4)
 	}
 
 	var cmd tea.Cmd
@@ -104,5 +167,20 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m pickerModel) View() string {
-	return "\n" + m.list.View()
+	var b strings.Builder
+
+	// ── Banner ──────────────────────────────────────────────────────────
+	banner := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(clrPurple).
+		Render("◆  mac")
+	sub := SubtitleStyle("  project selector")
+	sep := DimStyle(strings.Repeat("─", max(0, m.width-lipgloss.Width(banner+sub)-4)))
+	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Center, banner, sub, " ", sep))
+	b.WriteString("\n\n")
+
+	// ── List ────────────────────────────────────────────────────────────
+	b.WriteString(m.list.View())
+
+	return b.String()
 }

@@ -1,0 +1,57 @@
+import pytest
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+
+from mac_orchestrator.config import AgentLLM
+from mac_orchestrator.llm import build_chat_model
+
+
+def test_anthropic_provider(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    model = build_chat_model(AgentLLM("anthropic", "claude-sonnet-4-6"))
+    assert isinstance(model, ChatAnthropic)
+    assert model.model == "claude-sonnet-4-6"
+
+
+def test_local_provider_points_at_ollama():
+    model = build_chat_model(
+        AgentLLM("local", "qwen2.5-coder:14b", api_base="http://localhost:11434")
+    )
+    assert isinstance(model, ChatOpenAI)
+    assert model.model_name == "qwen2.5-coder:14b"
+    assert "11434" in str(model.openai_api_base)
+
+
+def test_local_provider_default_base():
+    model = build_chat_model(AgentLLM("local", "qwen2.5-coder:14b"))
+    assert "localhost:11434" in str(model.openai_api_base)
+
+
+def test_openai_provider(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    model = build_chat_model(AgentLLM("openai", "gpt-4o"))
+    assert model.model_name == "gpt-4o"
+
+
+def test_deepseek_provider(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    model = build_chat_model(AgentLLM("deepseek", "deepseek-chat"))
+    assert "api.deepseek.com" in str(model.openai_api_base)
+
+
+def test_openrouter_provider(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    model = build_chat_model(AgentLLM("openrouter", "openrouter/auto"))
+    assert "openrouter.ai" in str(model.openai_api_base)
+
+
+def test_missing_key_raises(monkeypatch, tmp_path):
+    monkeypatch.setenv("MAC_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="DEEPSEEK_API_KEY"):
+        build_chat_model(AgentLLM("deepseek", "deepseek-chat"))
+
+
+def test_unknown_provider_raises():
+    with pytest.raises(ValueError, match="unknown provider"):
+        build_chat_model(AgentLLM("watsonx", "x"))

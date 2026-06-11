@@ -27,6 +27,7 @@ Use 'mac code "<task>"' to invoke the LangGraph TDD orchestrator.`,
 
 	root.PersistentFlags().String("db", "",
 		`PostgreSQL DSN (default: MAC_DB_URL env, else `+defaultDSN+`)`)
+	root.PersistentFlags().Bool("no-banner", false, "skip the animated banner")
 
 	root.AddCommand(codeCmd())
 
@@ -38,12 +39,27 @@ Use 'mac code "<task>"' to invoke the LangGraph TDD orchestrator.`,
 
 func runRoot(cmd *cobra.Command, _ []string) error {
 	ctx := context.Background()
-	database, err := connectDB(ctx, cmd)
-	if err != nil {
-		return err
+
+	// Dial the DB while the banner animates so the intro costs zero wall time.
+	type connResult struct {
+		db  *db.DB
+		err error
 	}
-	defer database.Close()
-	return tui.Run(ctx, database)
+	ch := make(chan connResult, 1)
+	go func() {
+		d, err := connectDB(ctx, cmd)
+		ch <- connResult{d, err}
+	}()
+
+	noBanner, _ := cmd.Flags().GetBool("no-banner")
+	tui.ShowBanner(noBanner)
+
+	res := <-ch
+	if res.err != nil {
+		return res.err
+	}
+	defer res.db.Close()
+	return tui.Run(ctx, res.db)
 }
 
 func codeCmd() *cobra.Command {
@@ -68,14 +84,24 @@ func codeCmd() *cobra.Command {
 				return fmt.Errorf("no mac project in %s — run 'mac' first to initialise", cwd)
 			}
 
-			// Phase 2: hand off to LangGraph Python orchestrator.
-			fmt.Printf("Project: %s\nTask:    %s\n\nLangGraph orchestrator — Phase 2\n", project.Name, args[0])
-			return nil
+			// Hand off to the Python LangGraph orchestrator via the JSON
+			// event protocol; the Go TUI owns rendering and HIL approval.
+			fmt.Println(tui.CompactBrand())
+			bin := os.Getenv("MAC_ORCHESTRATOR")
+			if bin == "" {
+				bin = "mac-orchestrator"
+			}
+			return tui.RunCode(ctx, tui.RunCodeOpts{
+				Bin:     bin,
+				Project: cwd,
+				Task:    args[0],
+				DSN:     resolveDSN(cmd),
+			})
 		},
 	}
 }
 
-func connectDB(ctx context.Context, cmd *cobra.Command) (*db.DB, error) {
+func resolveDSN(cmd *cobra.Command) string {
 	dsn, _ := cmd.Flags().GetString("db")
 	if dsn == "" {
 		dsn = os.Getenv("MAC_DB_URL")
@@ -83,7 +109,11 @@ func connectDB(ctx context.Context, cmd *cobra.Command) (*db.DB, error) {
 	if dsn == "" {
 		dsn = defaultDSN
 	}
-	database, err := db.Connect(ctx, dsn)
+	return dsn
+}
+
+func connectDB(ctx context.Context, cmd *cobra.Command) (*db.DB, error) {
+	database, err := db.Connect(ctx, resolveDSN(cmd))
 	if err != nil {
 		return nil, fmt.Errorf(
 			"cannot connect to PostgreSQL: %w\n\nSet MAC_DB_URL env var or pass --db flag", err)

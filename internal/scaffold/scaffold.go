@@ -49,11 +49,20 @@ func New(ctx context.Context, database *db.DB, a Answers) error {
 	if err := initProjectFiles(root, a); err != nil {
 		return err
 	}
-	if err := writeDockerfiles(root, a.Backend, a.Frontend); err != nil {
-		return err
+	if a.Infra == "containers" || a.Infra == "k8s" {
+		if err := writeDockerfiles(root, a.Backend, a.Frontend); err != nil {
+			return err
+		}
 	}
-	if err := writeCloudIaC(root, a.Cloud, a.IAC); err != nil {
-		return err
+	if a.Infra == "k8s" {
+		if err := writeK8s(root, a); err != nil {
+			return err
+		}
+	}
+	if a.Cloud != "" {
+		if err := writeCloudIaC(root, a.Cloud, a.IAC); err != nil {
+			return err
+		}
 	}
 	if err := writeHarness(root, a); err != nil {
 		return err

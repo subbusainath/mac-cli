@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/subbusainath/mac-cli/internal/credentials"
 	"github.com/subbusainath/mac-cli/internal/db"
 	"github.com/subbusainath/mac-cli/internal/scaffold"
 )
@@ -68,6 +69,16 @@ func Run(ctx context.Context, database *db.DB) error {
 		return nil
 	}
 
+	if len(wiz.Answers.Keys) > 0 {
+		keys := make(map[credentials.Provider]string, len(wiz.Answers.Keys))
+		for p, k := range wiz.Answers.Keys {
+			keys[credentials.Provider(p)] = k
+		}
+		if err := credentials.Save(keys); err != nil {
+			return fmt.Errorf("save credentials: %w", err)
+		}
+	}
+
 	if err := scaffold.New(ctx, database, wiz.Answers); err != nil {
 		return fmt.Errorf("scaffold: %w", err)
 	}
@@ -93,13 +104,18 @@ func Run(ctx context.Context, database *db.DB) error {
 		DimStyle("Path:"),
 		DimStyle(wiz.Answers.Path),
 	)
-	fmt.Printf("  %s  %s / %s / %s / %s\n",
-		DimStyle("Stack:"),
-		wiz.Answers.Backend,
-		wiz.Answers.Frontend,
-		wiz.Answers.Cloud,
-		wiz.Answers.IAC,
-	)
+	var stack []string
+	for _, part := range []string{wiz.Answers.Backend, wiz.Answers.Frontend,
+		wiz.Answers.Infra, wiz.Answers.Cloud, wiz.Answers.IAC} {
+		if part != "" {
+			stack = append(stack, part)
+		}
+	}
+	fmt.Printf("  %s  %s\n", DimStyle("Stack:"), strings.Join(stack, " / "))
+	fmt.Printf("  %s  planner %s/%s · coder %s/%s\n",
+		DimStyle("Agents:"),
+		wiz.Answers.Planner.Provider, wiz.Answers.Planner.Model,
+		wiz.Answers.Coder.Provider, wiz.Answers.Coder.Model)
 	fmt.Println()
 	return nil
 }

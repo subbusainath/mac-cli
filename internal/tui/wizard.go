@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/subbusainath/mac-cli/internal/credentials"
 	"github.com/subbusainath/mac-cli/internal/scaffold"
 )
 
@@ -21,10 +22,18 @@ const (
 	stepBackend
 	stepWantFrontend
 	stepFrontend
+	stepWantInfra
+	stepInfraTarget
+	stepWantCloud
 	stepCloud
 	stepIaC
+	stepKeyGate
+	stepKeyInput
+	stepPlanner
+	stepPlannerModel
+	stepCoder
+	stepCoderModel
 	stepConfirm
-	maxStepCount = 8
 )
 
 var (
@@ -35,8 +44,17 @@ var (
 		stepBackend:      "Backend Stack",
 		stepWantFrontend: "Include Frontend?",
 		stepFrontend:     "Frontend Stack",
+		stepWantInfra:    "Infrastructure?",
+		stepInfraTarget:  "Deployment Target",
+		stepWantCloud:    "Cloud Provider?",
 		stepCloud:        "Cloud Provider",
 		stepIaC:          "Infrastructure as Code",
+		stepKeyGate:      "API Keys",
+		stepKeyInput:     "API Keys",
+		stepPlanner:      "Agents",
+		stepPlannerModel: "Agents",
+		stepCoder:        "Agents",
+		stepCoderModel:   "Agents",
 		stepConfirm:      "Confirm",
 	}
 	stepLabels = map[wizardStep]string{
@@ -46,14 +64,37 @@ var (
 		stepBackend:      "Choose your backend framework",
 		stepWantFrontend: "Do you want a frontend UI?",
 		stepFrontend:     "Choose your frontend framework",
+		stepWantInfra:    "Include infrastructure (containers / K8s / cloud)?",
+		stepInfraTarget:  "Choose your deployment target",
+		stepWantCloud:    "Deploy to a cloud provider?",
 		stepCloud:        "Which cloud provider?",
 		stepIaC:          "Pick your Infrastructure as Code tool",
 	}
 	progressOrder = []wizardStep{
-		stepName, stepPath, stepWantBackend, stepBackend,
-		stepWantFrontend, stepFrontend, stepCloud, stepIaC,
+		stepName, stepPath, stepWantBackend, stepWantFrontend,
+		stepWantInfra, stepWantCloud, stepKeyGate, stepPlanner,
 	}
 )
+
+// progressSlot maps detail steps to their gate's slot for the progress bar.
+func progressSlot(s wizardStep) wizardStep {
+	switch s {
+	case stepBackend:
+		return stepWantBackend
+	case stepFrontend:
+		return stepWantFrontend
+	case stepInfraTarget:
+		return stepWantInfra
+	case stepCloud, stepIaC:
+		return stepWantCloud
+	case stepKeyInput:
+		return stepKeyGate
+	case stepPlannerModel, stepCoder, stepCoderModel:
+		return stepPlanner
+	default:
+		return s
+	}
+}
 
 // ── Choice item for lists ─────────────────────────────────────────────────
 
@@ -109,6 +150,31 @@ var iacByCloud = map[string][]list.Item{
 		choiceItem{"deployment-manager", "Deployment Manager"},
 	},
 }
+
+var infraTargetChoices = []list.Item{
+	choiceItem{"local", "Run on this machine only — no container files"},
+	choiceItem{"containers", "Dockerfiles + docker-compose"},
+	choiceItem{"k8s", "Containers + Kubernetes manifests"},
+}
+
+var defaultModels = map[string]string{
+	"openai":     "gpt-4o",
+	"anthropic":  "claude-sonnet-4-6",
+	"deepseek":   "deepseek-chat",
+	"openrouter": "openrouter/auto",
+	"local":      "qwen2.5-coder:14b",
+}
+
+var providerTitles = map[credentials.Provider]string{
+	credentials.OpenAI:     "OpenAI",
+	credentials.Anthropic:  "Claude (Anthropic)",
+	credentials.DeepSeek:   "DeepSeek",
+	credentials.OpenRouter: "OpenRouter",
+}
+
+// plannerOrder: strongest first; coderOrder: cheapest first.
+var plannerOrder = []string{"anthropic", "openai", "openrouter", "deepseek", "local"}
+var coderOrder = []string{"local", "deepseek", "openrouter", "openai", "anthropic"}
 
 // ── Styled choice list ────────────────────────────────────────────────────
 
@@ -167,8 +233,19 @@ type wizardModel struct {
 	backend      list.Model
 	wantFrontend list.Model
 	frontend     list.Model
+	wantInfra    list.Model
+	infraTarget  list.Model
+	wantCloud    list.Model
 	cloud        list.Model
 	iac          list.Model
+	keyGate      list.Model
+	keyInput     textinput.Model
+	keyIdx       int
+	keyStatus    map[credentials.Provider]string // "env" | "file" | "wizard"
+	plannerPick  list.Model
+	plannerModel textinput.Model
+	coderPick    list.Model
+	coderModel   textinput.Model
 	Answers      scaffold.Answers
 	done         bool
 	err          string
@@ -185,6 +262,10 @@ func newWizardModel(cwd string) wizardModel {
 	path.SetValue(cwd)
 	path.CharLimit = 256
 
+	key := newStyledInput()
+	key.EchoMode = textinput.EchoPassword
+	key.CharLimit = 256
+
 	return wizardModel{
 		step:         stepName,
 		nameInput:    name,
@@ -193,7 +274,13 @@ func newWizardModel(cwd string) wizardModel {
 		backend:      newChoiceList(backendChoices, "Select backend"),
 		wantFrontend: newChoiceList(yesNoItems, "Include frontend?"),
 		frontend:     newChoiceList(frontendChoices, "Select frontend"),
-		cloud:        newChoiceList(cloudChoices, "Select cloud"),
+		wantInfra:    newChoiceList(yesNoItems, "Include infrastructure?"),
+		infraTarget:  newChoiceList(infraTargetChoices, "Deployment target"),
+		wantCloud:    newChoiceList(yesNoItems, "Deploy to cloud?"),
+		keyInput:     key,
+		keyStatus:    map[credentials.Provider]string{},
+		plannerModel: newStyledInput(),
+		coderModel:   newStyledInput(),
 		width:        80,
 		height:       24,
 	}
@@ -222,6 +309,9 @@ func (m wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.backend.SetWidth(w)
 		m.wantFrontend.SetWidth(w)
 		m.frontend.SetWidth(w)
+		m.wantInfra.SetWidth(w)
+		m.infraTarget.SetWidth(w)
+		m.wantCloud.SetWidth(w)
 		m.cloud.SetWidth(w)
 		if m.step >= stepIaC {
 			m.iac.SetWidth(w)
@@ -242,13 +332,74 @@ func (m wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.wantFrontend, cmd = m.wantFrontend.Update(msg)
 	case stepFrontend:
 		m.frontend, cmd = m.frontend.Update(msg)
+	case stepWantInfra:
+		m.wantInfra, cmd = m.wantInfra.Update(msg)
+	case stepInfraTarget:
+		m.infraTarget, cmd = m.infraTarget.Update(msg)
+	case stepWantCloud:
+		m.wantCloud, cmd = m.wantCloud.Update(msg)
 	case stepCloud:
 		m.cloud, cmd = m.cloud.Update(msg)
 	case stepIaC:
 		m.iac, cmd = m.iac.Update(msg)
+	case stepKeyGate:
+		m.keyGate, cmd = m.keyGate.Update(msg)
+	case stepKeyInput:
+		m.keyInput, cmd = m.keyInput.Update(msg)
+	case stepPlanner:
+		m.plannerPick, cmd = m.plannerPick.Update(msg)
+	case stepPlannerModel:
+		m.plannerModel, cmd = m.plannerModel.Update(msg)
+	case stepCoder:
+		m.coderPick, cmd = m.coderPick.Update(msg)
+	case stepCoderModel:
+		m.coderModel, cmd = m.coderModel.Update(msg)
 	}
 	return m, cmd
 }
+
+// ── Key phase helpers ─────────────────────────────────────────────────────
+
+// enterKeyPhase advances keyIdx past providers whose key is already known
+// and returns the next step: another gate, or the planner pick.
+func (m *wizardModel) enterKeyPhase() wizardStep {
+	for m.keyIdx < len(credentials.All) {
+		p := credentials.All[m.keyIdx]
+		if _, src, ok := credentials.Lookup(p); ok {
+			m.keyStatus[p] = src
+			m.keyIdx++
+			continue
+		}
+		title := fmt.Sprintf("Have a %s API key?", providerTitles[p])
+		m.keyGate = newChoiceList(yesNoItems, title)
+		return stepKeyGate
+	}
+	m.buildAgentLists()
+	return stepPlanner
+}
+
+// availableProviders returns providers with keys, ordered by pref, plus local.
+func (m *wizardModel) availableProviders(order []string) []list.Item {
+	var items []list.Item
+	for _, prov := range order {
+		if prov == "local" {
+			items = append(items, choiceItem{"local",
+				"Ollama at localhost:11434 — " + defaultModels["local"]})
+			continue
+		}
+		if m.keyStatus[credentials.Provider(prov)] != "" {
+			items = append(items, choiceItem{prov, "default: " + defaultModels[prov]})
+		}
+	}
+	return items
+}
+
+func (m *wizardModel) buildAgentLists() {
+	m.plannerPick = newChoiceList(m.availableProviders(plannerOrder), "Planner model provider")
+	m.coderPick = newChoiceList(m.availableProviders(coderOrder), "Coder model provider")
+}
+
+// ── Advance / Back ────────────────────────────────────────────────────────
 
 func (m wizardModel) advance() (tea.Model, tea.Cmd) {
 	m.err = ""
@@ -302,7 +453,7 @@ func (m wizardModel) advance() (tea.Model, tea.Cmd) {
 			m.step = stepFrontend
 		} else {
 			m.Answers.Frontend = ""
-			m.step = stepCloud
+			m.step = stepWantInfra
 		}
 
 	case stepFrontend:
@@ -311,7 +462,39 @@ func (m wizardModel) advance() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.Answers.Frontend = item.label
-		m.step = stepCloud
+		m.step = stepWantInfra
+
+	case stepWantInfra:
+		item, ok := m.wantInfra.SelectedItem().(choiceItem)
+		if !ok {
+			return m, nil
+		}
+		if item.label == "yes" {
+			m.step = stepInfraTarget
+		} else {
+			m.Answers.Infra, m.Answers.Cloud, m.Answers.IAC = "", "", ""
+			m.step = m.enterKeyPhase()
+		}
+
+	case stepInfraTarget:
+		item, ok := m.infraTarget.SelectedItem().(choiceItem)
+		if !ok {
+			return m, nil
+		}
+		m.Answers.Infra = item.label
+		m.step = stepWantCloud
+
+	case stepWantCloud:
+		item, ok := m.wantCloud.SelectedItem().(choiceItem)
+		if !ok {
+			return m, nil
+		}
+		if item.label == "yes" {
+			m.step = stepCloud
+		} else {
+			m.Answers.Cloud, m.Answers.IAC = "", ""
+			m.step = m.enterKeyPhase()
+		}
 
 	case stepCloud:
 		item, ok := m.cloud.SelectedItem().(choiceItem)
@@ -328,6 +511,71 @@ func (m wizardModel) advance() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.Answers.IAC = item.label
+		m.step = m.enterKeyPhase()
+
+	case stepKeyGate:
+		item, ok := m.keyGate.SelectedItem().(choiceItem)
+		if !ok {
+			return m, nil
+		}
+		p := credentials.All[m.keyIdx]
+		if item.label == "yes" {
+			m.keyInput.SetValue("")
+			m.keyInput.Placeholder = credentials.EnvVar(p) + " value"
+			m.keyInput.Focus()
+			m.step = stepKeyInput
+		} else {
+			m.keyIdx++
+			m.step = m.enterKeyPhase()
+		}
+
+	case stepKeyInput:
+		p := credentials.All[m.keyIdx]
+		if val := strings.TrimSpace(m.keyInput.Value()); val != "" {
+			if m.Answers.Keys == nil {
+				m.Answers.Keys = map[string]string{}
+			}
+			m.Answers.Keys[string(p)] = val
+			m.keyStatus[p] = "wizard"
+		}
+		m.keyInput.Blur()
+		m.keyIdx++
+		m.step = m.enterKeyPhase()
+
+	case stepPlanner:
+		item, ok := m.plannerPick.SelectedItem().(choiceItem)
+		if !ok {
+			return m, nil
+		}
+		m.Answers.Planner.Provider = item.label
+		m.plannerModel.SetValue(defaultModels[item.label])
+		m.plannerModel.Focus()
+		m.step = stepPlannerModel
+
+	case stepPlannerModel:
+		m.Answers.Planner.Model = strings.TrimSpace(m.plannerModel.Value())
+		if m.Answers.Planner.Model == "" {
+			m.Answers.Planner.Model = defaultModels[m.Answers.Planner.Provider]
+		}
+		m.plannerModel.Blur()
+		m.step = stepCoder
+
+	case stepCoder:
+		item, ok := m.coderPick.SelectedItem().(choiceItem)
+		if !ok {
+			return m, nil
+		}
+		m.Answers.Coder.Provider = item.label
+		m.coderModel.SetValue(defaultModels[item.label])
+		m.coderModel.Focus()
+		m.step = stepCoderModel
+
+	case stepCoderModel:
+		m.Answers.Coder.Model = strings.TrimSpace(m.coderModel.Value())
+		if m.Answers.Coder.Model == "" {
+			m.Answers.Coder.Model = defaultModels[m.Answers.Coder.Provider]
+		}
+		m.coderModel.Blur()
 		m.step = stepConfirm
 
 	case stepConfirm:
@@ -343,13 +591,32 @@ func (m wizardModel) back() (tea.Model, tea.Cmd) {
 	}
 	m.err = ""
 
-	// When going back from a backend/frontend detail step, go to the
-	// corresponding yes/no gate instead of the previous step directly.
 	switch m.step {
 	case stepBackend:
 		m.step = stepWantBackend
 	case stepFrontend:
 		m.step = stepWantFrontend
+	case stepInfraTarget:
+		m.step = stepWantInfra
+	case stepCloud:
+		m.step = stepWantCloud
+	case stepKeyInput:
+		m.step = stepKeyGate
+	case stepKeyGate, stepPlanner:
+		// Reset key phase state when backing out through it.
+		m.keyIdx = 0
+		for p, src := range m.keyStatus {
+			if src != "wizard" {
+				delete(m.keyStatus, p)
+			}
+		}
+		m.step = stepWantInfra
+	case stepPlannerModel:
+		m.step = stepPlanner
+	case stepCoder:
+		m.step = stepPlannerModel
+	case stepCoderModel:
+		m.step = stepCoder
 	default:
 		m.step--
 	}
@@ -401,10 +668,33 @@ func (m wizardModel) View() string {
 		b.WriteString(renderYesNoStep("Include a frontend UI?", m.wantFrontend))
 	case stepFrontend:
 		b.WriteString(renderListStep(m.frontend, "Frontend Stack"))
+	case stepWantInfra:
+		b.WriteString(renderYesNoStep("Include infrastructure (containers / K8s / cloud)?", m.wantInfra))
+	case stepInfraTarget:
+		b.WriteString(renderListStep(m.infraTarget, "Deployment Target"))
+	case stepWantCloud:
+		b.WriteString(renderYesNoStep("Deploy to a cloud provider?", m.wantCloud))
 	case stepCloud:
 		b.WriteString(renderListStep(m.cloud, "Cloud Provider"))
 	case stepIaC:
 		b.WriteString(renderListStep(m.iac, "Infrastructure as Code"))
+	case stepKeyGate:
+		p := credentials.All[m.keyIdx]
+		b.WriteString(renderKeyStatus(m.keyStatus))
+		b.WriteString(renderYesNoStep(fmt.Sprintf("Have a %s API key?", providerTitles[p]), m.keyGate))
+	case stepKeyInput:
+		p := credentials.All[m.keyIdx]
+		b.WriteString(renderTextStep(
+			fmt.Sprintf("Paste your %s key (input hidden)", providerTitles[p]),
+			m.keyInput.View()))
+	case stepPlanner:
+		b.WriteString(renderListStep(m.plannerPick, "Planner Provider"))
+	case stepPlannerModel:
+		b.WriteString(renderTextStep("Planner model (edit or press enter)", m.plannerModel.View()))
+	case stepCoder:
+		b.WriteString(renderListStep(m.coderPick, "Coder Provider"))
+	case stepCoderModel:
+		b.WriteString(renderTextStep("Coder model (edit or press enter)", m.coderModel.View()))
 	case stepConfirm:
 		b.WriteString(renderConfirm(m.Answers))
 	}
@@ -420,11 +710,11 @@ func (m wizardModel) View() string {
 // ── Sub-renderers ─────────────────────────────────────────────────────────
 
 func renderProgress(m wizardModel) string {
-	// Count how many steps the user has passed, skipping conditionally-hidden ones.
 	ordered := progressOrder
 	currentIdx := -1
+	slot := progressSlot(m.step)
 	for i, s := range ordered {
-		if s == m.step {
+		if s == slot {
 			currentIdx = i
 			break
 		}
@@ -433,24 +723,19 @@ func renderProgress(m wizardModel) string {
 		currentIdx = len(ordered) // confirm step
 	}
 
-	// Build dots — show a dot for each slot in progressOrder.
 	var dots strings.Builder
-	for i, s := range ordered {
+	for i := range ordered {
 		if i > 0 {
 			dots.WriteString("  ")
 		}
 		switch {
 		case i < currentIdx:
-			// Mark steps as done if they were skipped (e.g. backend detail
-			// when user said no) or actually completed.
 			dots.WriteString(dotDone)
 		case i == currentIdx:
 			dots.WriteString(dotCurrent)
 		default:
 			dots.WriteString(dotTodo)
 		}
-		// Optional: label first letter under each dot
-		_ = s
 	}
 
 	stepNum := currentIdx + 1
@@ -500,7 +785,6 @@ func renderYesNoStep(label string, l list.Model) string {
 		Render(label))
 	b.WriteString("\n\n")
 
-	// Compact yes/no — just the two options, no description needed.
 	d := list.NewDefaultDelegate()
 	d.SetSpacing(0)
 	d.Styles.NormalTitle = lipgloss.NewStyle().
@@ -520,7 +804,6 @@ func renderYesNoStep(label string, l list.Model) string {
 	yn.DisableQuitKeybindings()
 	yn.SetHeight(2)
 
-	// Sync the selected index from the model's stored list.
 	yn.Select(l.Index())
 
 	b.WriteString(lipgloss.NewStyle().PaddingLeft(2).Render(yn.View()))
@@ -532,6 +815,20 @@ func renderListStep(l list.Model, title string) string {
 	return l.View()
 }
 
+// renderKeyStatus shows ✓ badges for providers already resolved.
+func renderKeyStatus(status map[credentials.Provider]string) string {
+	var parts []string
+	for _, p := range credentials.All {
+		if src := status[p]; src != "" {
+			parts = append(parts, CheckStyle("✓ ")+string(p)+DimStyle(" ("+src+")"))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return lipgloss.NewStyle().PaddingLeft(2).Render(strings.Join(parts, "   ")) + "\n\n"
+}
+
 func renderConfirm(a scaffold.Answers) string {
 	var b strings.Builder
 
@@ -539,14 +836,16 @@ func renderConfirm(a scaffold.Answers) string {
 	b.WriteString(readyStyle.Render("✓  Ready to scaffold"))
 	b.WriteString("\n")
 
-	// ── Summary card ────────────────────────────────────────────────────
 	rows := []struct{ k, v string }{
 		{"Project", a.Name},
 		{"Path", a.Path},
 		{"Backend", iface(a.Backend)},
 		{"Frontend", iface(a.Frontend)},
-		{"Cloud", a.Cloud},
-		{"IaC", a.IAC},
+		{"Infra", iface(a.Infra)},
+		{"Cloud", iface(a.Cloud)},
+		{"IaC", iface(a.IAC)},
+		{"Planner", a.Planner.Provider + " / " + a.Planner.Model},
+		{"Coder", a.Coder.Provider + " / " + a.Coder.Model},
 	}
 
 	maxW := 0

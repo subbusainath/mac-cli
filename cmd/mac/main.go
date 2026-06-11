@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 
 	"github.com/spf13/cobra"
 	"github.com/subbusainath/mac-cli/internal/db"
@@ -69,24 +68,18 @@ func codeCmd() *cobra.Command {
 				return fmt.Errorf("no mac project in %s — run 'mac' first to initialise", cwd)
 			}
 
-			// Hand off to the Python LangGraph orchestrator. It owns the
-			// session lifecycle, TDD loop, and HIL prompts on this terminal.
+			// Hand off to the Python LangGraph orchestrator via the JSON
+			// event protocol; the Go TUI owns rendering and HIL approval.
 			bin := os.Getenv("MAC_ORCHESTRATOR")
 			if bin == "" {
 				bin = "mac-orchestrator"
 			}
-			orch := exec.CommandContext(ctx, bin,
-				"--project", cwd,
-				"--task", args[0],
-				"--db", resolveDSN(cmd),
-			)
-			orch.Stdin = os.Stdin
-			orch.Stdout = os.Stdout
-			orch.Stderr = os.Stderr
-			if err := orch.Run(); err != nil {
-				return fmt.Errorf("orchestrator: %w\n\nInstall it with: uv tool install --from ./orchestrator mac-orchestrator", err)
-			}
-			return nil
+			return tui.RunCode(ctx, tui.RunCodeOpts{
+				Bin:     bin,
+				Project: cwd,
+				Task:    args[0],
+				DSN:     resolveDSN(cmd),
+			})
 		},
 	}
 }

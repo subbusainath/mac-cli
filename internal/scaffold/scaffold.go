@@ -12,14 +12,25 @@ import (
 	"github.com/subbusainath/mac-cli/internal/db"
 )
 
-// Answers holds the choices collected by the wizard.
+// AgentChoice is the wizard's provider+model pick for one agent role.
+type AgentChoice struct {
+	Provider string
+	Model    string
+}
+
+// Answers holds the choices collected by the wizard. Empty string means
+// the user declined that option.
 type Answers struct {
 	Name     string
 	Path     string
 	Backend  string
 	Frontend string
-	Cloud    string
-	IAC      string
+	Infra    string // "" | "local" | "containers" | "k8s"
+	Cloud    string // "" when declined or Infra declined
+	IAC      string // "" when no cloud
+	Planner  AgentChoice
+	Coder    AgentChoice
+	Keys     map[string]string // provider -> key pasted in wizard; saved globally, never in the project
 }
 
 // New creates the full project scaffold from wizard answers.
@@ -48,7 +59,8 @@ func New(ctx context.Context, database *db.DB, a Answers) error {
 		return err
 	}
 
-	cfg := config.Default(a.Name, a.Backend, a.Frontend, a.Cloud, a.IAC)
+	cfg := config.Default(a.Name, a.Backend, a.Frontend, a.Infra, a.Cloud, a.IAC,
+		agentCfg(a.Planner), agentCfg(a.Coder))
 	if err := config.Write(root, cfg); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
@@ -56,6 +68,18 @@ func New(ctx context.Context, database *db.DB, a Answers) error {
 		return fmt.Errorf("register project: %w", err)
 	}
 	return nil
+}
+
+func agentCfg(c AgentChoice) config.AgentConfig {
+	if c.Provider == "" || c.Provider == "local" {
+		model := c.Model
+		if model == "" {
+			model = "qwen2.5-coder:14b"
+		}
+		return config.AgentConfig{Provider: "local", Model: model,
+			APIBase: "http://localhost:11434"}
+	}
+	return config.AgentConfig{Provider: c.Provider, Model: c.Model}
 }
 
 func initProjectFiles(root string, a Answers) error {

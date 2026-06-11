@@ -22,8 +22,9 @@ type ProjectConfig struct {
 	Name     string `toml:"name"`
 	Backend  string `toml:"backend"`
 	Frontend string `toml:"frontend"`
-	Cloud    string `toml:"cloud"`
-	IAC      string `toml:"iac"`
+	Infra    string `toml:"infra,omitempty"`
+	Cloud    string `toml:"cloud,omitempty"`
+	IAC      string `toml:"iac,omitempty"`
 }
 
 type AgentConfig struct {
@@ -32,27 +33,35 @@ type AgentConfig struct {
 	APIBase  string `toml:"api_base,omitempty"`
 }
 
-func Default(name, backend, frontend, cloud, iac string) *Config {
+// Default builds the project config. Zero-valued planner/coder fall back
+// to local Ollama so a key-less setup still works.
+func Default(name, backend, frontend, infra, cloud, iac string,
+	planner, coder AgentConfig) *Config {
 	return &Config{
 		Project: ProjectConfig{
 			Name:     name,
 			Backend:  backend,
 			Frontend: frontend,
+			Infra:    infra,
 			Cloud:    cloud,
 			IAC:      iac,
 		},
 		Agents: map[string]AgentConfig{
-			"planner": {
-				Provider: "anthropic",
-				Model:    "claude-sonnet-4-6",
-			},
-			"coder": {
-				Provider: "local",
-				Model:    "qwen2.5-coder:14b",
-				APIBase:  "http://localhost:11434",
-			},
+			"planner": orLocal(planner, "qwen2.5-coder:14b"),
+			"coder":   orLocal(coder, "qwen2.5-coder:14b"),
 		},
 	}
+}
+
+func orLocal(a AgentConfig, defaultModel string) AgentConfig {
+	if a.Provider == "" {
+		return AgentConfig{Provider: "local", Model: defaultModel,
+			APIBase: "http://localhost:11434"}
+	}
+	if a.Provider == "local" && a.APIBase == "" {
+		a.APIBase = "http://localhost:11434"
+	}
+	return a
 }
 
 func Write(projectRoot string, cfg *Config) error {

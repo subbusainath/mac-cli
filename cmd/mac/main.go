@@ -27,6 +27,7 @@ Use 'mac code "<task>"' to invoke the LangGraph TDD orchestrator.`,
 
 	root.PersistentFlags().String("db", "",
 		`PostgreSQL DSN (default: MAC_DB_URL env, else `+defaultDSN+`)`)
+	root.PersistentFlags().Bool("no-banner", false, "skip the animated banner")
 
 	root.AddCommand(codeCmd())
 
@@ -38,12 +39,27 @@ Use 'mac code "<task>"' to invoke the LangGraph TDD orchestrator.`,
 
 func runRoot(cmd *cobra.Command, _ []string) error {
 	ctx := context.Background()
-	database, err := connectDB(ctx, cmd)
-	if err != nil {
-		return err
+
+	// Dial the DB while the banner animates so the intro costs zero wall time.
+	type connResult struct {
+		db  *db.DB
+		err error
 	}
-	defer database.Close()
-	return tui.Run(ctx, database)
+	ch := make(chan connResult, 1)
+	go func() {
+		d, err := connectDB(ctx, cmd)
+		ch <- connResult{d, err}
+	}()
+
+	noBanner, _ := cmd.Flags().GetBool("no-banner")
+	tui.ShowBanner(noBanner)
+
+	res := <-ch
+	if res.err != nil {
+		return res.err
+	}
+	defer res.db.Close()
+	return tui.Run(ctx, res.db)
 }
 
 func codeCmd() *cobra.Command {
@@ -70,6 +86,7 @@ func codeCmd() *cobra.Command {
 
 			// Hand off to the Python LangGraph orchestrator via the JSON
 			// event protocol; the Go TUI owns rendering and HIL approval.
+			fmt.Println(tui.CompactBrand())
 			bin := os.Getenv("MAC_ORCHESTRATOR")
 			if bin == "" {
 				bin = "mac-orchestrator"

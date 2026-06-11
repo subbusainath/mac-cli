@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -31,11 +32,42 @@ func writeHarness(root string, a Answers) error {
 	return nil
 }
 
-func agentsMD(a Answers) string {
-	return fmt.Sprintf(`# AGENTS.md — Global Guardrails
+// stackParts lists only the options the user actually chose.
+func stackParts(a Answers) []string {
+	var parts []string
+	if a.Backend != "" {
+		parts = append(parts, "backend: "+a.Backend)
+	}
+	if a.Frontend != "" {
+		parts = append(parts, "frontend: "+a.Frontend)
+	}
+	if a.Infra != "" {
+		parts = append(parts, "infra: "+a.Infra)
+	}
+	if a.Cloud != "" {
+		parts = append(parts, fmt.Sprintf("cloud: %s (%s)", a.Cloud, a.IAC))
+	}
+	parts = append(parts,
+		fmt.Sprintf("planner: %s/%s", a.Planner.Provider, a.Planner.Model),
+		fmt.Sprintf("coder: %s/%s", a.Coder.Provider, a.Coder.Model))
+	return parts
+}
 
-Stack: %s / %s / %s / %s  |  Generated: %s
+// quickStart returns the single command that brings the project up.
+func quickStart(a Answers) string {
+	if a.Infra == "containers" || a.Infra == "k8s" {
+		return "docker compose up"
+	}
+	if a.Backend != "" {
+		return "cd backend && " + backendRunCmds[a.Backend]
+	}
+	if a.Frontend != "" {
+		return "cd frontend && " + frontendRunCmds[a.Frontend]
+	}
+	return "# no runnable components scaffolded"
+}
 
+const agentsBodyMD = `
 ## Golden Principles (Karpathy Minimal Style)
 
 - Think first, code second
@@ -66,106 +98,96 @@ Every non-trivial function must document:
 - **THE ISSUE** — root cause or context
 - **HOW IT SOLVED** — mechanism of solution
 - **USAGE** — copy-paste runnable example
-`,
-		a.Backend, a.Frontend, a.Cloud, a.IAC,
+`
+
+func agentsMD(a Answers) string {
+	return fmt.Sprintf("# AGENTS.md — Global Guardrails\n\nStack: %s  |  Generated: %s\n"+agentsBodyMD,
+		strings.Join(stackParts(a), " · "),
 		time.Now().Format("2006-01-02"),
 	)
 }
 
 func contextMapMD(a Answers) string {
-	return fmt.Sprintf(`# CONTEXT_MAP.md — Navigation Index
+	type row struct{ dir, purpose, ctx string }
+	var rows []row
+	if a.Backend != "" {
+		rows = append(rows, row{"backend/", a.Backend + " service — Hexagonal Architecture", "backend/CONTEXT.md"})
+	}
+	if a.Frontend != "" {
+		rows = append(rows, row{"frontend/", a.Frontend + " UI layer", "frontend/CONTEXT.md"})
+	}
+	if a.Cloud != "" {
+		rows = append(rows, row{"infra/", fmt.Sprintf("%s / %s infrastructure", a.Cloud, a.IAC), "infra/CONTEXT.md"})
+	}
+	if a.Infra == "k8s" {
+		rows = append(rows, row{"k8s/", "Kubernetes manifests", "—"})
+	}
+	rows = append(rows,
+		row{"docs/", "Architecture diagrams, ADRs", "—"},
+		row{"scripts/", "Dev tooling, CI helpers", "—"},
+		row{".mac/", "mac CLI config (config.toml)", "—"})
 
-| Directory | Purpose                              | Context file         |
-|-----------|--------------------------------------|----------------------|
-| backend/  | %s service — Hexagonal Architecture  | backend/CONTEXT.md   |
-| frontend/ | %s UI layer                          | frontend/CONTEXT.md  |
-| infra/    | %s / %s infrastructure               | infra/CONTEXT.md     |
-| docs/     | Architecture diagrams, ADRs          | —                    |
-| scripts/  | Dev tooling, CI helpers              | —                    |
-| .mac/     | mac CLI config (config.toml)         | —                    |
-`, a.Backend, a.Frontend, a.Cloud, a.IAC)
+	var b strings.Builder
+	b.WriteString("# CONTEXT_MAP.md — Navigation Index\n\n")
+	b.WriteString("| Directory | Purpose | Context file |\n|-----------|---------|--------------|\n")
+	for _, r := range rows {
+		fmt.Fprintf(&b, "| %s | %s | %s |\n", r.dir, r.purpose, r.ctx)
+	}
+	return b.String()
 }
 
 func contextMD(a Answers) string {
-	return fmt.Sprintf(`# CONTEXT.md — Root
-
-## Truth Tier: Authoritative
-
-## Stack
-
-- Backend:  %s
-- Frontend: %s
-- Cloud:    %s / %s
-
-## Run Commands
-
-`+"```"+`bash
-# Full stack
-docker compose up
-
-# Backend only  →  see backend/CONTEXT.md
-# Frontend only →  see frontend/CONTEXT.md
-`+"```"+`
-
-## Active Plans
-
-- [ ] Initial scaffold complete
-- [ ] Add authentication
-- [ ] Configure CI/CD pipeline
-`, a.Backend, a.Frontend, a.Cloud, a.IAC)
+	var b strings.Builder
+	b.WriteString("# CONTEXT.md — Root\n\n## Truth Tier: Authoritative\n\n## Stack\n\n")
+	for _, p := range stackParts(a) {
+		b.WriteString("- " + p + "\n")
+	}
+	b.WriteString("\n## Run Commands\n\n```bash\n" + quickStart(a) + "\n")
+	if a.Backend != "" {
+		b.WriteString("# Backend only  →  see backend/CONTEXT.md\n")
+	}
+	if a.Frontend != "" {
+		b.WriteString("# Frontend only →  see frontend/CONTEXT.md\n")
+	}
+	b.WriteString("```\n\n## Active Plans\n\n- [ ] Initial scaffold complete\n")
+	return b.String()
 }
 
 func readmeMD(a Answers) string {
-	return fmt.Sprintf(`# %s
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n> %s\n\n## Quick Start\n\n```bash\n%s\n```\n",
+		a.Name, strings.Join(stackParts(a), " · "), quickStart(a))
 
-> %s + %s on %s (%s)
-
-## Quick Start
-
-`+"```"+`bash
-docker compose up
-`+"```"+`
-
-## Architecture
-
-`+"```"+`mermaid
-graph TB
-    subgraph FE ["%s Frontend"]
-        UI[UI Layer]
-    end
-    subgraph BE ["%s Backend — Hexagonal"]
-        API[Adapters / API]
-        APP[Application / Use Cases]
-        DOM[Domain / Entities]
-        PER[Adapters / Persistence]
-    end
-    subgraph INFRA ["%s / %s"]
-        DB[(PostgreSQL + pgvector)]
-    end
-
-    UI  --> API
-    API --> APP
-    APP --> DOM
-    APP --> PER
-    PER --> DB
-`+"```"+`
-
-## Directory Layout
-
-`+"```"+`
-.
-├── backend/   # %s  (Hexagonal Architecture)
-├── frontend/  # %s
-├── infra/     # %s / %s
-├── docs/
-└── .mac/      # mac CLI config
-`+"```"+`
-`,
-		a.Name,
-		a.Backend, a.Frontend, a.Cloud, a.IAC,
-		a.Frontend, a.Backend, a.Cloud, a.IAC,
-		a.Backend, a.Frontend, a.Cloud, a.IAC,
-	)
+	b.WriteString("\n## Architecture\n\n```mermaid\ngraph TB\n")
+	if a.Frontend != "" {
+		fmt.Fprintf(&b, "    subgraph FE [\"%s Frontend\"]\n        UI[UI Layer]\n    end\n", a.Frontend)
+	}
+	if a.Backend != "" {
+		fmt.Fprintf(&b, "    subgraph BE [\"%s Backend — Hexagonal\"]\n", a.Backend)
+		b.WriteString("        API[Adapters / API]\n        APP[Application / Use Cases]\n")
+		b.WriteString("        DOM[Domain / Entities]\n        PER[Adapters / Persistence]\n    end\n")
+	}
+	if a.Frontend != "" && a.Backend != "" {
+		b.WriteString("    UI --> API\n")
+	}
+	if a.Backend != "" {
+		b.WriteString("    API --> APP\n    APP --> DOM\n    APP --> PER\n")
+	}
+	b.WriteString("```\n\n## Directory Layout\n\n```\n.\n")
+	if a.Backend != "" {
+		fmt.Fprintf(&b, "├── backend/   # %s (Hexagonal Architecture)\n", a.Backend)
+	}
+	if a.Frontend != "" {
+		fmt.Fprintf(&b, "├── frontend/  # %s\n", a.Frontend)
+	}
+	if a.Cloud != "" {
+		fmt.Fprintf(&b, "├── infra/     # %s / %s\n", a.Cloud, a.IAC)
+	}
+	if a.Infra == "k8s" {
+		b.WriteString("├── k8s/       # Kubernetes manifests\n")
+	}
+	b.WriteString("├── docs/\n└── .mac/      # mac CLI config\n```\n")
+	return b.String()
 }
 
 var backendRunCmds = map[string]string{
@@ -190,8 +212,9 @@ var frontendRunCmds = map[string]string{
 }
 
 func subContextFiles(a Answers) map[string]string {
-	return map[string]string{
-		"backend": fmt.Sprintf(`# CONTEXT.md — backend
+	out := map[string]string{}
+	if a.Backend != "" {
+		out["backend"] = fmt.Sprintf(`# CONTEXT.md — backend
 
 ## Architecture: Hexagonal
 
@@ -208,9 +231,10 @@ cd backend && %s
 `+"```"+`bash
 cd backend && %s
 `+"```"+`
-`, backendRunCmds[a.Backend], backendTestCmds[a.Backend]),
-
-		"frontend": fmt.Sprintf(`# CONTEXT.md — frontend
+`, backendRunCmds[a.Backend], backendTestCmds[a.Backend])
+	}
+	if a.Frontend != "" {
+		out["frontend"] = fmt.Sprintf(`# CONTEXT.md — frontend
 
 ## Framework: %s
 
@@ -219,9 +243,10 @@ cd backend && %s
 `+"```"+`bash
 cd frontend && %s
 `+"```"+`
-`, a.Frontend, frontendRunCmds[a.Frontend]),
-
-		"infra": `# CONTEXT.md — infra
+`, a.Frontend, frontendRunCmds[a.Frontend])
+	}
+	if a.Cloud != "" {
+		out["infra"] = `# CONTEXT.md — infra
 
 ## Contains IaC configuration only — no application logic.
 
@@ -230,6 +255,7 @@ cd frontend && %s
 ` + "```" + `bash
 # See the subdirectory for your chosen tool (terraform / cdk / sam / pulumi / bicep)
 ` + "```" + `
-`,
+`
 	}
+	return out
 }

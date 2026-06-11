@@ -94,16 +94,22 @@ var frontendDirs = map[string][]string{
 }
 
 func createHexagonalStructure(root, backend, frontend string) error {
-	bdirs, ok := backendDirs[backend]
-	if !ok {
-		return fmt.Errorf("unknown backend: %s", backend)
+	var all []string
+	if backend != "" {
+		bdirs, ok := backendDirs[backend]
+		if !ok {
+			return fmt.Errorf("unknown backend: %s", backend)
+		}
+		all = append(all, bdirs...)
 	}
-	fdirs, ok := frontendDirs[frontend]
-	if !ok {
-		return fmt.Errorf("unknown frontend: %s", frontend)
+	if frontend != "" {
+		fdirs, ok := frontendDirs[frontend]
+		if !ok {
+			return fmt.Errorf("unknown frontend: %s", frontend)
+		}
+		all = append(all, fdirs...)
 	}
 
-	all := append(bdirs, fdirs...)
 	all = append(all, "docs", "scripts")
 
 	for _, d := range all {

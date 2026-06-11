@@ -162,8 +162,12 @@ var frontendPorts = map[string]string{
 func dockerCompose(backend, frontend string) string {
 	bp := backendPorts[backend]
 	fp := frontendPorts[frontend]
-	return fmt.Sprintf(`services:
-  backend:
+
+	var svc strings.Builder
+	svc.WriteString("services:\n")
+
+	if backend != "" {
+		fmt.Fprintf(&svc, `  backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -175,16 +179,28 @@ func dockerCompose(backend, frontend string) string {
       db:
         condition: service_healthy
 
-  frontend:
+`, bp, bp)
+	}
+
+	if frontend != "" {
+		fmt.Fprintf(&svc, `  frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
       - "%s:%s"
-    depends_on:
+`, fp, fp)
+		if backend != "" {
+			svc.WriteString(`    depends_on:
       - backend
+`)
+		}
+		svc.WriteString("\n")
+	}
 
-  db:
+	// DB only when backend (which uses it) is present.
+	if backend != "" {
+		svc.WriteString(`  db:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: app
@@ -200,7 +216,10 @@ func dockerCompose(backend, frontend string) string {
 
 volumes:
   pg_data:
-`, bp, bp, fp, fp)
+`)
+	}
+
+	return svc.String()
 }
 
 var dockerignore = strings.Join([]string{
@@ -209,21 +228,28 @@ var dockerignore = strings.Join([]string{
 }, "\n") + "\n"
 
 func writeDockerfiles(root, backend, frontend string) error {
-	bdf, ok := backendDockerfiles[backend]
-	if !ok {
-		return fmt.Errorf("no Dockerfile for backend: %s", backend)
+	var pairs []struct{ path, content string }
+
+	if backend != "" {
+		bdf, ok := backendDockerfiles[backend]
+		if !ok {
+			return fmt.Errorf("no Dockerfile for backend: %s", backend)
+		}
+		pairs = append(pairs, struct{ path, content string }{filepath.Join(root, "backend", "Dockerfile"), bdf})
 	}
-	fdf, ok := frontendDockerfiles[frontend]
-	if !ok {
-		fdf = frontendDockerfiles["vanilla"]
+	if frontend != "" {
+		fdf, ok := frontendDockerfiles[frontend]
+		if !ok {
+			fdf = frontendDockerfiles["vanilla"]
+		}
+		pairs = append(pairs, struct{ path, content string }{filepath.Join(root, "frontend", "Dockerfile"), fdf})
 	}
 
-	pairs := []struct{ path, content string }{
-		{filepath.Join(root, "backend", "Dockerfile"), bdf},
-		{filepath.Join(root, "frontend", "Dockerfile"), fdf},
-		{filepath.Join(root, "docker-compose.yml"), dockerCompose(backend, frontend)},
-		{filepath.Join(root, ".dockerignore"), dockerignore},
+	// Only generate compose file if at least one component exists.
+	if backend != "" || frontend != "" {
+		pairs = append(pairs, struct{ path, content string }{filepath.Join(root, "docker-compose.yml"), dockerCompose(backend, frontend)})
 	}
+	pairs = append(pairs, struct{ path, content string }{filepath.Join(root, ".dockerignore"), dockerignore})
 	for _, p := range pairs {
 		if err := os.MkdirAll(filepath.Dir(p.path), 0o755); err != nil {
 			return err

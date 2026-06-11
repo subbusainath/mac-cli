@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/subbusainath/mac-cli/internal/db"
 	"github.com/subbusainath/mac-cli/internal/scaffold"
 )
@@ -24,7 +26,11 @@ func Run(ctx context.Context, database *db.DB) error {
 		return fmt.Errorf("check project: %w", err)
 	}
 	if existing != nil {
-		fmt.Printf("Active project: %s (%s)\n", existing.Name, existing.Path)
+		fmt.Printf("%s %s %s\n",
+			AccentStyle("◆  Active project:"),
+			AccentStyle(existing.Name),
+			DimStyle(existing.Path),
+		)
 		return nil
 	}
 
@@ -44,7 +50,10 @@ func Run(ctx context.Context, database *db.DB) error {
 		return nil
 	}
 	if picker.choice != nil {
-		fmt.Printf("Switched to project: %s\n", picker.choice.Name)
+		fmt.Printf("%s %s\n",
+			SuccessStyle("➜  Switched to project:"),
+			SuccessStyle(picker.choice.Name),
+		)
 		return nil
 	}
 
@@ -62,6 +71,35 @@ func Run(ctx context.Context, database *db.DB) error {
 	if err := scaffold.New(ctx, database, wiz.Answers); err != nil {
 		return fmt.Errorf("scaffold: %w", err)
 	}
-	fmt.Printf("\nProject %q ready at %s\n", wiz.Answers.Name, wiz.Answers.Path)
+
+	// Styled success banner
+	banner := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(clrGreen).
+		Background(clrOverlay).
+		Padding(0, 1).
+		Render("✓  Project ready")
+
+	sep := lipgloss.NewStyle().
+		Foreground(clrBorder).
+		Render(strings.Repeat("─", max(0, 60-lipgloss.Width(banner))))
+
+	fmt.Printf("\n  %s%s\n", banner, sep)
+	fmt.Printf("  %s  %s\n",
+		SuccessStyle("Name:"),
+		AccentStyle(wiz.Answers.Name),
+	)
+	fmt.Printf("  %s  %s\n",
+		DimStyle("Path:"),
+		DimStyle(wiz.Answers.Path),
+	)
+	fmt.Printf("  %s  %s / %s / %s / %s\n",
+		DimStyle("Stack:"),
+		wiz.Answers.Backend,
+		wiz.Answers.Frontend,
+		wiz.Answers.Cloud,
+		wiz.Answers.IAC,
+	)
+	fmt.Println()
 	return nil
 }
